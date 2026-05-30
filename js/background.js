@@ -1,55 +1,53 @@
-window.onload = function () {
-  var loopRequestId;
+importScripts('/js/lib/moment.min.js', '/js/lib/webtoolkit.md5.js', '/js/helper.js');
+
+const ALARM_NAME = "wk-update-alarm";
+
+// initialization
+chrome.runtime.onInstalled.addListener(() => {
   // initialize the badge color
-  chrome.browserAction.setBadgeBackgroundColor({ color: "#ff00aa" });
+  chrome.action.setBadgeBackgroundColor({ color: "#ff00aa" });
 
   // check that there is a Chrome sync value
   chrome.storage.sync.get("wkUserData", function (obj) {
-    if (obj.wkUserData === undefined) {
-      if (localStorage.wkUserData === undefined) {
-        // if a local storage does not exist, initialize it
-        setWkUserData(new WkUserData());
-      }
+    if (!obj.wkUserData) {
+      chrome.storage.local.get("wkUserData", function (localObj) {
+        if (!localObj.wkUserData) {
+          setWkUserData(new WkUserData(), startAlarm);
+        } else {
+          startAlarm();
+        }
+      });
     } else {
       // get the existing user data from Chrome sync
-      localStorage.wkUserData = JSON.stringify(obj.wkUserData);
+      chrome.storage.local.set({ wkUserData: obj.wkUserData }, startAlarm);
     }
-    loopRequestUserData();
   });
+});
 
-  // update data every x milliseconds
-  function loopRequestUserData() {
-    var wkUserData = JSON.parse(localStorage.wkUserData);
-    requestUserData(true, function () {
-      loopRequestId = window.setTimeout(
-        loopRequestUserData,
-        wkUserData.refreshInterval,
-        true,
-        true
-      );
-    });
+function startAlarm() {
+  getWkUserData(function (wkUserData) {
+    const periodInMinutes = (wkUserData && wkUserData.refreshInterval) ? Math.max(1, wkUserData.refreshInterval / 60000) : 15;
+    chrome.alarms.create(ALARM_NAME, { periodInMinutes: periodInMinutes });
+    requestUserData(true);
+  });
+}
+
+// update data when alarm fires
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === ALARM_NAME) {
+    requestUserData(true);
   }
+});
 
-  // when the update interval is changed, restart loopRequestUserData with the updated interval
-  chrome.storage.onChanged.addListener(function (changes, namespace) {
-    if ("wkUserData" in changes && loopRequestId !== undefined) {
-      var oldValues = changes.wkUserData.oldValue;
-      var newValues = changes.wkUserData.newValue;
-      if (newValues.refreshInterval != oldValues.refreshInterval) {
-        window.clearTimeout(loopRequestId);
-        loopRequestId = loopRequestUserData();
-      }
+// when the update interval is changed, restart alarm with the updated interval
+chrome.storage.onChanged.addListener(function (changes, namespace) {
+  if ("wkUserData" in changes) {
+    var oldValues = changes.wkUserData.oldValue;
+    var newValues = changes.wkUserData.newValue;
+    if (newValues && (!oldValues || newValues.refreshInterval != oldValues.refreshInterval)) {
+      const periodInMinutes = Math.max(1, newValues.refreshInterval / 60000);
+      chrome.alarms.create(ALARM_NAME, { periodInMinutes: periodInMinutes });
     }
-  });
+  }
+});
 
-  // disable headers in order to allow inlining pages within an iframe
-  chrome.webRequest.onHeadersReceived.addListener(
-    details => ({
-      responseHeaders: details.responseHeaders.filter(header =>
-          !['content-security-policy','x-frame-options'].includes(header.name.toLowerCase()))
-    }),
-    {
-      urls: ['*://www.wanikani.com/*']
-    },
-    ['blocking', 'responseHeaders', 'extraHeaders']);
-};

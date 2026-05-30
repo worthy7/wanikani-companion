@@ -26,47 +26,56 @@ function WkUserData() {
 
 // save the local user data
 function setWkUserData(wkUserData, callback) {
-  // save the data into the local storage
-  localStorage.wkUserData = JSON.stringify(wkUserData);
-  // ... and sync it with the current Chrome account
-  chrome.storage.sync.set({ wkUserData: wkUserData });
-
-  if (callback) callback();
+  chrome.storage.local.set({ wkUserData: wkUserData }, function() {
+    // and sync it with the current Chrome account
+    chrome.storage.sync.set({ wkUserData: wkUserData }, function() {
+      if (callback) callback();
+    });
+  });
 }
 
 // get the local user data as an object
-function getWkUserData() {
-  return JSON.parse(localStorage.wkUserData);
+function getWkUserData(callback) {
+  chrome.storage.local.get("wkUserData", function(obj) {
+    callback(obj.wkUserData);
+  });
 }
 
 // get the user data via the WaniKani API
-function getApiData(publicKey, type, callback) {
-  var xhr = new XMLHttpRequest();
-
-  const modifiedDate =
+async function getApiData(publicKey, type, callback) {
+  const modifiedDateKey =
     type === "user"
       ? null
       : type === "summary"
       ? "summaryLastModified"
       : "assignmentsLastModified";
-  xhr.open("GET", `https://api.wanikani.com/v2/${type}`, true);
-  xhr.setRequestHeader("Authorization", `Bearer ${publicKey}`);
-  xhr.setRequestHeader("Cache-Control", "no-cache");
-  if (modifiedDate && JSON.parse(localStorage.wkUserData)[modifiedDate]) {
-    xhr.setRequestHeader(
-      "If-Modified-Since",
-      moment(JSON.parse(localStorage.wkUserData)[modifiedDate]).format(
-        "ddd, DD MMM YYYY HH:mm:ss [GMT]"
-      )
-    );
-  }
-  xhr.onreadystatechange = function () {
-    if (xhr.readyState == 4) {
-      const response = xhr.responseText ? JSON.parse(xhr.responseText) : {};
-      callback(response);
-    }
+
+  const headers = {
+    "Authorization": `Bearer ${publicKey}`,
+    "Cache-Control": "no-cache"
   };
-  xhr.send();
+
+  chrome.storage.local.get("wkUserData", async function(obj) {
+    const wkUserData = obj.wkUserData || {};
+    if (modifiedDateKey && wkUserData[modifiedDateKey]) {
+      headers["If-Modified-Since"] = moment(wkUserData[modifiedDateKey]).format(
+        "ddd, DD MMM YYYY HH:mm:ss [GMT]"
+      );
+    }
+
+    try {
+      const response = await fetch(`https://api.wanikani.com/v2/${type}`, { headers });
+      if (response.status === 304) {
+        callback({});
+        return;
+      }
+      const data = await response.json();
+      callback(data);
+    } catch (error) {
+      console.error("Error fetching API data:", error);
+      callback({});
+    }
+  });
 }
 
 function fetchAssignmentsLoop(
@@ -78,9 +87,12 @@ function fetchAssignmentsLoop(
   getApiData(publicKey, `assignments?hidden=false${nextUrl}`, function (
     responseData
   ) {
-    if (!responseData.data) return null;
+    if (!responseData.data) {
+        if (callback) callback();
+        return;
+    }
     const nextAssignments = assignments.concat(responseData.data);
-    if (responseData.pages.next_url) {
+    if (responseData.pages && responseData.pages.next_url) {
       const nextUrlId = responseData.data[responseData.data.length - 1].id;
       fetchAssignmentsLoop(
         publicKey,
@@ -118,7 +130,6 @@ function fetchAssignmentsLoop(
           if (callback) callback();
         }
       );
-      // return srsDistributionOfAssignments;
     }
   });
 }
@@ -136,122 +147,118 @@ function parseRemainingTime(reviewDate) {
 
 // update the local user data from the JSON data returned from the WaniKani API
 function updateWkUserData(jsonUserData, type, callback) {
-  var wkUserData = JSON.parse(localStorage.wkUserData);
+  chrome.storage.local.get("wkUserData", function(obj) {
+    var wkUserData = obj.wkUserData || new WkUserData();
 
-  if (type == "summary" && jsonUserData.data) {
-    wkUserData.nbLessons = jsonUserData.data.lessons[0].subject_ids.length;
-    const nextReviews = jsonUserData.data.reviews.find(
-      rev => rev.subject_ids.length > 0
-    );
-    wkUserData.nbReviews = nextReviews ? nextReviews.subject_ids.length : 0;
-    wkUserData.nextReview = parseRemainingTime(
-      jsonUserData.data.next_reviews_at
-    );
-    wkUserData.summaryLastModified = jsonUserData.data_updated_at;
-  } else if (type == "srs-distribution" && jsonUserData) {
-    wkUserData.srsNbApprentice = jsonUserData.apprentice;
-    wkUserData.srsNbGuru = jsonUserData.guru;
-    wkUserData.srsNbMaster = jsonUserData.master;
-    wkUserData.srsNbEnlighten = jsonUserData.enlighten;
-    wkUserData.srsNbBurned = jsonUserData.burned;
-    wkUserData.assignmentsLastModified = jsonUserData.assignmentsLastModified;
-  }
+    if (type == "summary" && jsonUserData.data) {
+      wkUserData.nbLessons = jsonUserData.data.lessons[0].subject_ids.length;
+      const nextReviews = jsonUserData.data.reviews.find(
+        rev => rev.subject_ids.length > 0
+      );
+      wkUserData.nbReviews = nextReviews ? nextReviews.subject_ids.length : 0;
+      wkUserData.nextReview = parseRemainingTime(
+        jsonUserData.data.next_reviews_at
+      );
+      wkUserData.summaryLastModified = jsonUserData.data_updated_at;
+    } else if (type == "srs-distribution" && jsonUserData) {
+      wkUserData.srsNbApprentice = jsonUserData.apprentice;
+      wkUserData.srsNbGuru = jsonUserData.guru;
+      wkUserData.srsNbMaster = jsonUserData.master;
+      wkUserData.srsNbEnlighten = jsonUserData.enlighten;
+      wkUserData.srsNbBurned = jsonUserData.burned;
+      wkUserData.assignmentsLastModified = jsonUserData.assignmentsLastModified;
+    }
 
-  setWkUserData(wkUserData);
-
-  if (callback) callback();
+    setWkUserData(wkUserData, callback);
+  });
 }
 
 // request the data to Wanikani API, display notifications and save local data
 function requestUserData(notify, callback) {
-  var currentData = getWkUserData();
-  // update data and display notifications
-  if (currentData.userPublicKey != "") {
-    // get lessons and reviews data
-    getApiData(currentData.userPublicKey, "summary", function (userData) {
-      const nextReviews = userData.data
-        ? userData.data.reviews.find(rev => rev.subject_ids.length > 0)
-        : null;
-      var nbLessons = userData.data
-        ? userData.data.lessons[0].subject_ids.length
-        : currentData.nbLessons;
-      var nbReviews = userData.data
-        ? nextReviews
-          ? nextReviews.subject_ids.length
-          : 0
-        : currentData.nbReviews;
+  getWkUserData(function(currentData) {
+    if (!currentData) return;
+    
+    // update data and display notifications
+    if (currentData.userPublicKey != "") {
+      // get lessons and reviews data
+      getApiData(currentData.userPublicKey, "summary", function (userData) {
+        const nextReviews = userData.data
+          ? userData.data.reviews.find(rev => rev.subject_ids.length > 0)
+          : null;
+        var nbLessons = userData.data
+          ? userData.data.lessons[0].subject_ids.length
+          : currentData.nbLessons;
+        var nbReviews = userData.data
+          ? nextReviews
+            ? nextReviews.subject_ids.length
+            : 0
+          : currentData.nbReviews;
 
-      // display desktop notifications
-      if (notify === true && currentData.refreshInterval != 0) {
-        var notified = false;
-        if (nbReviews > 0 && nbReviews != currentData.nbReviews) {
-          createNotification(
-            "You have " + nbReviews + " reviews available.",
-            "https://www.wanikani.com/review",
-            "reviews"
-          );
-          notified = true;
+        // display desktop notifications
+        if (notify === true && currentData.refreshInterval != 0) {
+          var notified = false;
+          if (nbReviews > 0 && nbReviews != currentData.nbReviews) {
+            createNotification(
+              "You have " + nbReviews + " reviews available.",
+              "https://www.wanikani.com/review",
+              "reviews"
+            );
+            notified = true;
+          }
+          if (nbLessons > 0 && nbLessons != currentData.nbLessons) {
+            createNotification(
+              "You have " + nbLessons + " lessons available.",
+              "https://www.wanikani.com/lesson",
+              "lessons"
+            );
+            notified = true;
+          }
         }
-        //if (nbLessons > 0 && nbLessons != currentData.nbLessons) {
-        if (nbLessons > 0 && nbLessons != currentData.nbLessons) {
-          createNotification(
-            "You have " + nbLessons + " lessons available.",
-            "https://www.wanikani.com/lesson",
-            "lessons"
-          );
-          notified = true;
-        }
-        // play notification sound
-        if (notified === true && currentData.notifSound === true) {
-          var sound = new Audio("/snd/notification.mp3");
-          sound.play();
-        }
-      }
 
-      // update badge text and title
-      var total = nbReviews + nbLessons;
-      if (total == 0 && currentData.hide0Badge) {
-        chrome.browserAction.setBadgeText({ text: "" });
-      } else {
-        chrome.browserAction.setBadgeText({ text: total.toString() });
-      }
-      chrome.browserAction.setTitle({
-        title:
-          "WaniKani Companion\n" +
-          "Lesson(s): " +
-          nbLessons +
-          "\n" +
-          "Review(s): " +
-          nbReviews,
+        // update badge text and title
+        var total = nbReviews + nbLessons;
+        if (total == 0 && currentData.hide0Badge) {
+          chrome.action.setBadgeText({ text: "" });
+        } else {
+          chrome.action.setBadgeText({ text: total.toString() });
+        }
+        chrome.action.setTitle({
+          title:
+            "WaniKani Companion\n" +
+            "Lesson(s): " +
+            nbLessons +
+            "\n" +
+            "Review(s): " +
+            nbReviews,
+        });
+
+        // save study data
+        updateWkUserData(userData, "summary", function () {
+          fetchAssignmentsLoop(currentData.userPublicKey, callback);
+        });
       });
-
-      // save study data
-      updateWkUserData(userData, "summary", function () {
-        fetchAssignmentsLoop(currentData.userPublicKey, callback);
-      });
-    });
-  }
-}
-
-// create a HTML notification
-function createNotification(body, url, tag) {
-  var notification = new Notification("WaniKani Companion", {
-    icon: "/img/wanikani/icon.png",
-    body: body,
-    tag: tag,
+    }
   });
-
-  notification.onclick = function () {
-    window.open(url);
-  };
-
-  // vanish the notifications after [notifLifetime] ms
-  // if [notifLifetime] == -1, the notification stay until the user close it
-  if (getWkUserData().notifLifetime != -1) {
-    notification.onshow = function () {
-      window.setTimeout(function () {
-        notification.close();
-      }, getWkUserData().notifLifetime);
-    };
-  }
 }
+
+// create a notification using chrome.notifications
+function createNotification(body, url, tag) {
+  chrome.notifications.create(tag, {
+    type: "basic",
+    iconUrl: "/img/wanikani/icon.png",
+    title: "WaniKani Companion",
+    message: body,
+    priority: 1
+  });
+}
+
+// handle notification clicks
+if (typeof chrome !== 'undefined' && chrome.notifications) {
+    chrome.notifications.onClicked.addListener(function(notificationId) {
+        let url = "https://www.wanikani.com/";
+        if (notificationId === "reviews") url += "review";
+        if (notificationId === "lessons") url += "lesson";
+        chrome.tabs.create({ url: url });
+    });
+}
+

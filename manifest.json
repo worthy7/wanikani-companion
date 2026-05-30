@@ -1,9 +1,9 @@
 {
-  "manifest_version": 2,
+  "manifest_version": 3,
   "name": "WaniKani Companion",
-  "version": "2.2",
+  "version": "2.2.1",
   "description": "Your favorite Japanese learning app at a click away.",
-  "browser_action": {
+  "action": {
     "default_title": "WaniKani Companion",
     "default_icon": "/img/wanikani/icon.png",
     "default_popup": "/html/home.html"
@@ -12,12 +12,24 @@
     "128": "/img/wanikani/icon.png"
   },
   "permissions": [
-    "*://*.wanikani.com/",
     "notifications",
     "storage",
-    "webRequest",
-    "webRequestBlocking"
+    "alarms",
+    "declarativeNetRequest",
+    "declarativeNetRequestFeedback"
   ],
+  "host_permissions": [
+    "*://*.wanikani.com/"
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "ruleset_1",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  },
   "content_scripts": [
     {
       "matches": ["*://www.wanikani.com/*"],
@@ -27,11 +39,6 @@
     }
   ],
   "background": {
-    "scripts": [
-      "/js/lib/moment.min.js",
-      "/js/lib/webtoolkit.md5.js",
-      "/js/helper.js",
-      "/js/background.js"
-    ]
+    "service_worker": "/js/background.js"
   }
 }

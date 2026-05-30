@@ -1,4 +1,8 @@
 window.onload = function() {
   // load the WaniKani page iframe
-  document.getElementById('wanikaniFrame').src = localStorage.toLink;
+  chrome.storage.local.get("toLink", function(obj) {
+    if (obj.toLink) {
+      document.getElementById('wanikaniFrame').src = obj.toLink;
+    }
+  });
 }
